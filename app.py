@@ -6,7 +6,7 @@ from datetime import datetime
 import json
 import io
 
-st.set_page_config(page_title="AviaPazlAP", layout="wide")
+st.set_page_config(page_title="AviaPazlAP", page_icon="logoSitr.jpg",layout="wide")
 
 # ===================== DATABASE =====================
 
