@@ -7,16 +7,20 @@ import io
 import requests
 import os
 
+# ---------------------- ВРЕМЕННО: ТОКЕН ЖЁСТКО ПРОПИСАН (ДЛЯ ПРОВЕРКИ) ----------------------
+YANDEX_TOKEN = "y0__wgBEJj5gowHGNeNQiDFi-7NF4t1owTsAz6dBNIoV8vvXDfCA5au"
+# После проверки замените этот блок на чтение из переменных окружения:
+# try:
+#     YANDEX_TOKEN = st.secrets["YANDEX_TOKEN"]
+# except:
+#     YANDEX_TOKEN = os.environ.get("YANDEX_TOKEN")
+
 # ---------------------- НАСТРОЙКА СТРАНИЦЫ ----------------------
 st.set_page_config(page_title="AviaPazlAP", page_icon="logoSitr.jpg", layout="wide")
 
-# ---------------------- ТОКЕН ЯНДЕКСА (ВРЕМЕННО ХАРДКОД) ----------------------
-# ВНИМАНИЕ! Это временное решение для проверки. ПОТОМ УБРАТЬ!
-YANDEX_TOKEN = "y0__wgBEJj5gowHGNeNQiDFi-7NF4t1owTsAz6dBNIoV8vvXDfCA5au"
-st.info(f"🔧 Токен загружен (длина: {len(YANDEX_TOKEN)}) - ВРЕМЕННОЕ РЕШЕНИЕ")
-
 # ---------------------- ПОДКЛЮЧЕНИЕ К БАЗЕ ----------------------
 engine = create_engine('sqlite:///suppliers.db', echo=False)
+
 
 def init_db():
     with engine.connect() as conn:
@@ -46,47 +50,68 @@ def init_db():
         """))
         conn.commit()
 
+
 init_db()
 
-# ---------------------- ФУНКЦИЯ ЗАГРУЗКИ НА ЯНДЕКС.ДИСК ----------------------
+
+# ---------------------- ФУНКЦИЯ ЗАГРУЗКИ НА ЯНДЕКС.ДИСК (С СОЗДАНИЕМ ПАПКИ) ----------------------
 def upload_to_yandex_disk(file_bytes, filename, token):
+    """Загружает файл на Яндекс.Диск в папку AviaPazlAP_exports и возвращает публичную ссылку"""
     if not token:
         return None
 
-    # 1. Получаем URL для загрузки
-    url = "https://cloud-api.yandex.net/v1/disk/resources/upload"
     headers = {"Authorization": f"OAuth {token}"}
+    folder_path = "/AviaPazlAP_exports"
+
+    # 1. Проверяем, существует ли папка
+    check_url = "https://cloud-api.yandex.net/v1/disk/resources"
+    params = {"path": folder_path}
+    resp = requests.get(check_url, headers=headers, params=params)
+    if resp.status_code == 404:
+        # Папка не существует – создаём
+        create_resp = requests.put(check_url, headers=headers, params=params)
+        if create_resp.status_code not in (200, 201):
+            st.error(f"Ошибка создания папки: {create_resp.text}")
+            return None
+        st.info(f"📁 Папка {folder_path} создана на Яндекс.Диске")
+    elif resp.status_code != 200:
+        st.error(f"Ошибка проверки папки: {resp.text}")
+        return None
+
+    # 2. Запрашиваем URL для загрузки файла
+    upload_url = "https://cloud-api.yandex.net/v1/disk/resources/upload"
     params = {
-        "path": f"/AviaPazlAP_exports/{filename}",
+        "path": f"{folder_path}/{filename}",
         "overwrite": "true"
     }
-    resp = requests.get(url, headers=headers, params=params)
+    resp = requests.get(upload_url, headers=headers, params=params)
     if resp.status_code != 200:
         st.error(f"Ошибка получения ссылки для загрузки: {resp.text}")
         return None
-    upload_url = resp.json()["href"]
+    upload_href = resp.json()["href"]
 
-    # 2. Загружаем файл
+    # 3. Загружаем файл
     with io.BytesIO(file_bytes) as f:
-        upload_resp = requests.put(upload_url, data=f.read())
+        upload_resp = requests.put(upload_href, data=f.read())
     if upload_resp.status_code not in (200, 201):
         st.error(f"Ошибка загрузки файла: {upload_resp.text}")
         return None
 
-    # 3. Делаем файл публичным
+    # 4. Делаем файл публичным
     publish_url = "https://cloud-api.yandex.net/v1/disk/resources/publish"
-    pub_resp = requests.put(publish_url, headers=headers, params={"path": f"/AviaPazlAP_exports/{filename}"})
+    pub_resp = requests.put(publish_url, headers=headers, params={"path": f"{folder_path}/{filename}"})
     if pub_resp.status_code != 200:
-        # Если публикация не удалась, даём ссылку на страницу файла
+        # Если публикация не удалась – вернём ссылку на страницу файла (требует авторизации)
         return f"https://disk.yandex.ru/client/disk/AviaPazlAP_exports/{filename}"
 
-    # Получаем публичную ссылку
-    info_resp = requests.get("https://cloud-api.yandex.net/v1/disk/resources", headers=headers, params={"path": f"/AviaPazlAP_exports/{filename}"})
+    # 5. Получаем публичную ссылку
+    info_resp = requests.get(check_url, headers=headers, params={"path": f"{folder_path}/{filename}"})
     if info_resp.status_code == 200:
         public_url = info_resp.json().get("public_url")
         if public_url:
             return public_url
     return f"https://disk.yandex.ru/d/???"
+
 
 # ---------------------- ЗАГОЛОВОК ----------------------
 col1, col2 = st.columns([1, 10])
@@ -155,7 +180,8 @@ with tab2:
                         item['_filename'] = r['filename']
                         rows.append(item)
                     result_df = pd.DataFrame(rows)
-                    priority_cols = ['_supplier', '_uploaded_at', '_filename', 'article', 'PN', 'P/N', 'TERM', 'name', 'DES', 'price', 'UNIT/USD', 'stock', 'QTY']
+                    priority_cols = ['_supplier', '_uploaded_at', '_filename', 'article', 'PN', 'P/N', 'TERM', 'name',
+                                     'DES', 'price', 'UNIT/USD', 'stock', 'QTY']
                     existing_priority = [c for c in priority_cols if c in result_df.columns]
                     other_cols = [c for c in result_df.columns if c not in existing_priority]
                     result_df = result_df[existing_priority + other_cols]
@@ -188,14 +214,15 @@ with tab3:
                     file_bytes = output.getvalue()
                     filename = f"Полная_база_AviaPazlAP_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
 
-                    # Используем токен из переменной
                     if YANDEX_TOKEN:
                         public_link = upload_to_yandex_disk(file_bytes, filename, YANDEX_TOKEN)
                         if public_link:
                             with engine.connect() as conn:
                                 conn.execute(
-                                    text("INSERT INTO exports (filename, download_url, created_at, file_size) VALUES (:f, :u, :c, :s)"),
-                                    {"f": filename, "u": public_link, "c": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "s": len(file_bytes)}
+                                    text(
+                                        "INSERT INTO exports (filename, download_url, created_at, file_size) VALUES (:f, :u, :c, :s)"),
+                                    {"f": filename, "u": public_link, "c": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                     "s": len(file_bytes)}
                                 )
                                 conn.commit()
                             st.success(f"✅ Файл загружен на Яндекс.Диск! [Скачать]({public_link})")
@@ -236,8 +263,10 @@ with tab3:
                 conn
             )
         if not exports_df.empty:
-            exports_df['Скачать'] = exports_df['download_url'].apply(lambda url: f'<a href="{url}" target="_blank">📥 Скачать</a>')
-            st.markdown(exports_df[['filename', 'created_at', 'Скачать']].to_html(escape=False, index=False), unsafe_allow_html=True)
+            exports_df['Скачать'] = exports_df['download_url'].apply(
+                lambda url: f'<a href="{url}" target="_blank">📥 Скачать</a>')
+            st.markdown(exports_df[['filename', 'created_at', 'Скачать']].to_html(escape=False, index=False),
+                        unsafe_allow_html=True)
         else:
             st.info("Нет сохранённых экспортов.")
     except Exception as e:
