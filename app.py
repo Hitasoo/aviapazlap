@@ -7,20 +7,48 @@ import io
 import requests
 import os
 
-# ---------------------- ВРЕМЕННО: ТОКЕН ЖЁСТКО ПРОПИСАН (ДЛЯ ПРОВЕРКИ) ----------------------
-YANDEX_TOKEN = "y0__wgBEJj5gowHGNeNQiDFi-7NF4t1owTsAz6dBNIoV8vvXDfCA5au"
-# После проверки замените этот блок на чтение из переменных окружения:
-# try:
-#     YANDEX_TOKEN = st.secrets["YANDEX_TOKEN"]
-# except:
-#     YANDEX_TOKEN = os.environ.get("YANDEX_TOKEN")
+# ===================== ДИАГНОСТИКА ТОКЕНА (временный блок) =====================
+# Этот блок проверяет, существует ли токен, и пытается выполнить тестовый запрос к Яндекс.Диску
+# После отладки его можно удалить или закомментировать
+
+# Получаем токен (сначала жёстко, потом можно будет переключиться на переменные окружения)
+# ВНИМАНИЕ: замените токен на новый, полученный с правилами disk.read/write/info
+YANDEX_TOKEN = "y0__wgBEJj5gowHGNeNQiDFi-7NF4t1owTsAz6dBNIoV8vvXDfCA5au"   # !!! ЗАМЕНИТЕ НА НОВЫЙ ТОКЕН !!!
+
+st.write("### 🧪 Диагностика Яндекс.Диска")
+if YANDEX_TOKEN:
+    st.success(f"✅ Токен найден, длина: {len(YANDEX_TOKEN)}")
+    # Пробуем выполнить тестовый запрос к API (проверка прав)
+    test_url = "https://cloud-api.yandex.net/v1/disk/"
+    headers = {"Authorization": f"OAuth {YANDEX_TOKEN}"}
+    try:
+        resp = requests.get(test_url, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            st.success("✅ Токен валиден, доступ к диску есть.")
+            # Дополнительно проверим, есть ли право на запись (создадим временную папку)
+            test_folder = "/AviaPazlAP_test"
+            mkdir_resp = requests.put("https://cloud-api.yandex.net/v1/disk/resources", headers=headers, params={"path": test_folder})
+            if mkdir_resp.status_code in (200, 201):
+                st.success("✅ Токен имеет право на создание папок (запись).")
+                # Удалим тестовую папку
+                requests.delete("https://cloud-api.yandex.net/v1/disk/resources", headers=headers, params={"path": test_folder, "permanently": "true"})
+            else:
+                st.error(f"❌ Токен НЕ имеет права на запись. Ошибка: {mkdir_resp.status_code} - {mkdir_resp.text}")
+        else:
+            st.error(f"❌ Токен недействителен или нет прав. Код ошибки: {resp.status_code}")
+            st.info("Получите новый токен по ссылке: https://oauth.yandex.ru/authorize?response_type=token&client_id=add9034b7cb842e895c96f8f438dcee7\nНе забудьте отметить права: disk.info, disk.read, disk.write")
+    except Exception as e:
+        st.error(f"Ошибка соединения с API: {e}")
+else:
+    st.error("❌ Токен отсутствует. Укажите YANDEX_TOKEN в коде или переменной окружения.")
+st.divider()
+# ===========================================================================
 
 # ---------------------- НАСТРОЙКА СТРАНИЦЫ ----------------------
 st.set_page_config(page_title="AviaPazlAP", page_icon="logoSitr.jpg", layout="wide")
 
 # ---------------------- ПОДКЛЮЧЕНИЕ К БАЗЕ ----------------------
 engine = create_engine('sqlite:///suppliers.db', echo=False)
-
 
 def init_db():
     with engine.connect() as conn:
@@ -50,13 +78,14 @@ def init_db():
         """))
         conn.commit()
 
-
 init_db()
-
 
 # ---------------------- ФУНКЦИЯ ЗАГРУЗКИ НА ЯНДЕКС.ДИСК (С СОЗДАНИЕМ ПАПКИ) ----------------------
 def upload_to_yandex_disk(file_bytes, filename, token):
-    """Загружает файл на Яндекс.Диск в папку AviaPazlAP_exports и возвращает публичную ссылку"""
+    """
+    Загружает файл на Яндекс.Диск в папку AviaPazlAP_exports и возвращает публичную ссылку.
+    Если папки нет, создаёт её.
+    """
     if not token:
         return None
 
@@ -219,8 +248,7 @@ with tab3:
                         if public_link:
                             with engine.connect() as conn:
                                 conn.execute(
-                                    text(
-                                        "INSERT INTO exports (filename, download_url, created_at, file_size) VALUES (:f, :u, :c, :s)"),
+                                    text("INSERT INTO exports (filename, download_url, created_at, file_size) VALUES (:f, :u, :c, :s)"),
                                     {"f": filename, "u": public_link, "c": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                                      "s": len(file_bytes)}
                                 )
