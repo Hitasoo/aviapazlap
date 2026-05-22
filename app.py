@@ -221,7 +221,7 @@ with tab2:
 
 # ---------------------- ЭКСПОРТ И СТАТИСТИКА ----------------------
 with tab3:
-    st.subheader("Экспорт всей базы")
+    st.subheader("Экспорт всeй базы")
 
     if st.button("📥 Экспортировать ВСЮ базу в Excel", type="primary"):
         with st.spinner("Создаём Excel файл..."):
