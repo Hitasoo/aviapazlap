@@ -7,21 +7,13 @@ import io
 import requests
 import os
 
-# ---------------------- ДИАГНОСТИКА ТОКЕНА (временный блок) ----------------------
-# Сначала пробуем получить из st.secrets, потом из переменных окружения
-try:
-    YANDEX_TOKEN = st.secrets["YANDEX_TOKEN"]
-    st.info(f"✅ Токен загружен из st.secrets (длина: {len(YANDEX_TOKEN)})")
-except Exception as e1:
-    YANDEX_TOKEN = os.environ.get("YANDEX_TOKEN")
-    if YANDEX_TOKEN:
-        st.info(f"✅ Токен загружен из os.environ (длина: {len(YANDEX_TOKEN)})")
-    else:
-        st.error("❌ Токен Яндекс.Диска НЕ НАЙДЕН! Проверьте переменную YANDEX_TOKEN в настройках Render.")
-# -----------------------------------------------------------------
-
 # ---------------------- НАСТРОЙКА СТРАНИЦЫ ----------------------
 st.set_page_config(page_title="AviaPazlAP", page_icon="logoSitr.jpg", layout="wide")
+
+# ---------------------- ТОКЕН ЯНДЕКСА (ВРЕМЕННО ХАРДКОД) ----------------------
+# ВНИМАНИЕ! Это временное решение для проверки. ПОТОМ УБРАТЬ!
+YANDEX_TOKEN = "y0__wgBEJj5gowHGNeNQiDFi-7NF4t1owTsAz6dBNIoV8vvXDfCA5au"
+st.info(f"🔧 Токен загружен (длина: {len(YANDEX_TOKEN)}) - ВРЕМЕННОЕ РЕШЕНИЕ")
 
 # ---------------------- ПОДКЛЮЧЕНИЕ К БАЗЕ ----------------------
 engine = create_engine('sqlite:///suppliers.db', echo=False)
@@ -43,7 +35,6 @@ def init_db():
         """))
         conn.execute(text("CREATE INDEX IF NOT EXISTS idx_article ON parts(article)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS idx_name ON parts(name)"))
-
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS exports (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -59,10 +50,10 @@ init_db()
 
 # ---------------------- ФУНКЦИЯ ЗАГРУЗКИ НА ЯНДЕКС.ДИСК ----------------------
 def upload_to_yandex_disk(file_bytes, filename, token):
-    """Загружает файл на Яндекс.Диск в папку AviaPazlAP_exports и возвращает публичную ссылку"""
     if not token:
         return None
 
+    # 1. Получаем URL для загрузки
     url = "https://cloud-api.yandex.net/v1/disk/resources/upload"
     headers = {"Authorization": f"OAuth {token}"}
     params = {
@@ -75,17 +66,21 @@ def upload_to_yandex_disk(file_bytes, filename, token):
         return None
     upload_url = resp.json()["href"]
 
+    # 2. Загружаем файл
     with io.BytesIO(file_bytes) as f:
         upload_resp = requests.put(upload_url, data=f.read())
     if upload_resp.status_code not in (200, 201):
         st.error(f"Ошибка загрузки файла: {upload_resp.text}")
         return None
 
+    # 3. Делаем файл публичным
     publish_url = "https://cloud-api.yandex.net/v1/disk/resources/publish"
     pub_resp = requests.put(publish_url, headers=headers, params={"path": f"/AviaPazlAP_exports/{filename}"})
     if pub_resp.status_code != 200:
+        # Если публикация не удалась, даём ссылку на страницу файла
         return f"https://disk.yandex.ru/client/disk/AviaPazlAP_exports/{filename}"
 
+    # Получаем публичную ссылку
     info_resp = requests.get("https://cloud-api.yandex.net/v1/disk/resources", headers=headers, params={"path": f"/AviaPazlAP_exports/{filename}"})
     if info_resp.status_code == 200:
         public_url = info_resp.json().get("public_url")
@@ -193,6 +188,7 @@ with tab3:
                     file_bytes = output.getvalue()
                     filename = f"Полная_база_AviaPazlAP_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
 
+                    # Используем токен из переменной
                     if YANDEX_TOKEN:
                         public_link = upload_to_yandex_disk(file_bytes, filename, YANDEX_TOKEN)
                         if public_link:
