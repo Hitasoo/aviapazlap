@@ -6,6 +6,7 @@ import json
 import io
 import requests
 import os
+from urllib.parse import quote
 
 # ============================================================
 # 1. ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ
@@ -54,7 +55,34 @@ def init_db():
 init_db()
 
 # ============================================================
-# 3. ФУНКЦИЯ ЗАГРУЗКИ НА ЯНДЕКС.ДИСК (создание папки, публикация)
+# 3. ДИАГНОСТИКА ТОКЕНА (с кодированием пути)
+# ============================================================
+st.write("### 🧪 Проверка токена Яндекс.Диска")
+if not YANDEX_TOKEN:
+    st.error("❌ Токен не задан. Добавьте переменную окружения YANDEX_TOKEN.")
+else:
+    headers = {"Authorization": f"OAuth {YANDEX_TOKEN}"}
+    test_folder = "/AviaPazlAP_test"
+    encoded_path = quote(test_folder, safe='/')
+    try:
+        resp = requests.put("https://cloud-api.yandex.net/v1/disk/resources",
+                            headers=headers, params={"path": encoded_path})
+        if resp.status_code in (200, 201):
+            st.success("✅ Токен имеет право на запись (создание папок).")
+            # Удаляем тестовую папку
+            requests.delete("https://cloud-api.yandex.net/v1/disk/resources",
+                            headers=headers, params={"path": encoded_path, "permanently": "true"})
+        elif resp.status_code in (403, 401):
+            st.error("❌ Токен НЕ имеет права на запись (Forbidden/Unauthorized).")
+            st.info("Получите новый токен с правами disk.info, disk.read, disk.write.")
+        else:
+            st.warning(f"⚠️ Неизвестный ответ API: {resp.status_code}")
+    except Exception as e:
+        st.error(f"Ошибка соединения: {e}")
+st.divider()
+
+# ============================================================
+# 4. ФУНКЦИЯ ЗАГРУЗКИ НА ЯНДЕКС.ДИСК (с кодированием пути)
 # ============================================================
 def upload_to_yandex_disk(file_bytes, filename, token):
     if not token:
@@ -63,12 +91,13 @@ def upload_to_yandex_disk(file_bytes, filename, token):
 
     headers = {"Authorization": f"OAuth {token}"}
     folder_path = "/AviaPazlAP_exports"
+    encoded_folder = quote(folder_path, safe='/')
 
-    # Проверка/создание папки
+    # 1. Проверка/создание папки
     check_url = "https://cloud-api.yandex.net/v1/disk/resources"
-    resp = requests.get(check_url, headers=headers, params={"path": folder_path})
+    resp = requests.get(check_url, headers=headers, params={"path": encoded_folder})
     if resp.status_code == 404:
-        create_resp = requests.put(check_url, headers=headers, params={"path": folder_path})
+        create_resp = requests.put(check_url, headers=headers, params={"path": encoded_folder})
         if create_resp.status_code not in (200, 201):
             st.error(f"Ошибка создания папки: {create_resp.text}")
             return None
@@ -77,31 +106,31 @@ def upload_to_yandex_disk(file_bytes, filename, token):
         st.error(f"Ошибка проверки папки: {resp.text}")
         return None
 
-    # Получаем URL для загрузки
+    # 2. Получаем URL для загрузки
     upload_url = "https://cloud-api.yandex.net/v1/disk/resources/upload"
     full_path = f"{folder_path}/{filename}"
-    params = {"path": full_path, "overwrite": "true"}
-    resp = requests.get(upload_url, headers=headers, params=params)
+    encoded_full = quote(full_path, safe='/')
+    resp = requests.get(upload_url, headers=headers, params={"path": encoded_full, "overwrite": "true"})
     if resp.status_code != 200:
         st.error(f"Ошибка получения ссылки для загрузки: {resp.text}")
         return None
     upload_href = resp.json()["href"]
 
-    # Загружаем файл
+    # 3. Загружаем файл
     with io.BytesIO(file_bytes) as f:
         upload_resp = requests.put(upload_href, data=f.read())
     if upload_resp.status_code not in (200, 201):
         st.error(f"Ошибка загрузки файла: {upload_resp.text}")
         return None
 
-    # Делаем публичным
+    # 4. Делаем файл публичным
     publish_url = "https://cloud-api.yandex.net/v1/disk/resources/publish"
-    pub_resp = requests.put(publish_url, headers=headers, params={"path": full_path})
+    pub_resp = requests.put(publish_url, headers=headers, params={"path": encoded_full})
     if pub_resp.status_code != 200:
         return f"https://disk.yandex.ru/client/disk/AviaPazlAP_exports/{filename}"
 
-    # Получаем публичную ссылку
-    info_resp = requests.get(check_url, headers=headers, params={"path": full_path})
+    # 5. Получаем публичную ссылку
+    info_resp = requests.get(check_url, headers=headers, params={"path": encoded_full})
     if info_resp.status_code == 200:
         public_url = info_resp.json().get("public_url")
         if public_url:
@@ -109,7 +138,7 @@ def upload_to_yandex_disk(file_bytes, filename, token):
     return f"https://disk.yandex.ru/d/???"
 
 # ============================================================
-# 4. ИНТЕРФЕЙС
+# 5. ИНТЕРФЕЙС ПОЛЬЗОВАТЕЛЯ
 # ============================================================
 st.set_page_config(page_title="AviaPazlAP", page_icon="logoSitr.jpg", layout="wide")
 
@@ -185,7 +214,7 @@ with tab2:
             except Exception as e:
                 st.error(f"Ошибка поиска: {e}")
 
-# --- Экспорт и статистика ---
+# --- Экспорт ---
 with tab3:
     st.subheader("Экспорт всей базы")
     if st.button("📥 Экспортировать ВСЮ базу в Excel", type="primary"):
@@ -203,7 +232,7 @@ with tab3:
                         full_df.to_excel(writer, index=False, sheet_name='All_Data')
                     output.seek(0)
                     file_bytes = output.getvalue()
-                    # Имя файла только латиница – без проблем с кодировкой
+                    # Имя файла только латиница
                     filename = f"Full_Export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
 
                     if YANDEX_TOKEN:
