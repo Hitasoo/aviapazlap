@@ -1,12 +1,12 @@
 import streamlit as st
 import pandas as pd
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, text, bindparam
 from datetime import datetime
 import json
 import io
 import requests
 import os
-import re  # <-- для очистки цены
+import re
 from urllib.parse import quote
 
 # ============================================================
@@ -112,17 +112,13 @@ def upload_to_yandex_disk(file_bytes, filename, token):
     return f"https://disk.yandex.ru/d/???"
 
 # ============================================================
-# 4. ФУНКЦИЯ ОЧИСТКИ ЦЕНЫ (удаляет запятые, пробелы, валюту)
+# 4. ФУНКЦИЯ ОЧИСТКИ ЦЕНЫ
 # ============================================================
 def clean_price(value):
-    """Преобразует цену из строки с запятыми и символами в число float"""
     if pd.isna(value):
         return None
-    # Преобразуем в строку (на случай, если пришло число)
     s = str(value)
-    # Удаляем всё, кроме цифр, точки и минуса
     cleaned = re.sub(r'[^\d\.\-]', '', s)
-    # Если после очистки пусто – вернём None
     if not cleaned:
         return None
     try:
@@ -152,8 +148,7 @@ with tab1:
         try:
             df = pd.read_excel(uploaded_file)
 
-            # --- ОЧИСТКА СТОЛБЦА С ЦЕНОЙ ПЕРЕД ПЕРЕИМЕНОВАНИЕМ ---
-            # Находим, какой столбец содержит цену (возможные имена)
+            # Очистка цены
             price_col = None
             for candidate in ['price', 'UNIT/USD', 'TOTAL/USD', 'Price']:
                 if candidate in df.columns:
@@ -161,9 +156,8 @@ with tab1:
                     break
             if price_col:
                 df[price_col] = df[price_col].apply(clean_price)
-            # -------------------------------------------------
 
-            # Нормализация колонок (переименование)
+            # Переименование колонок
             rename_map = {
                 'PN': 'article', 'P/N': 'article', 'TERM': 'article',
                 'DES': 'name', 'UNIT/USD': 'price', 'QTY': 'stock'
@@ -172,7 +166,7 @@ with tab1:
                 if old in df.columns and new not in df.columns:
                     df = df.rename(columns={old: new})
 
-            # Добавляем служебные колонки
+            # Метаданные
             df['supplier'] = supplier_name
             df['uploaded_at'] = datetime.now().strftime("%Y-%m-%d %H:%M")
             df['filename'] = uploaded_file.name
@@ -188,7 +182,7 @@ with tab1:
         except Exception as e:
             st.error(f"Ошибка загрузки: {e}")
 
-# --- Поиск ---
+# --- Поиск (исправлен для PostgreSQL) ---
 with tab2:
     st.subheader("Поиск по общей базе")
     search = st.text_input("Введите артикул, название или любой текст")
@@ -197,13 +191,15 @@ with tab2:
             st.warning("Введите минимум 2 символа")
         else:
             try:
+                # Используем text() + bindparam для кроссплатформенности
+                query = text("""
+                    SELECT supplier, uploaded_at, filename, raw_data
+                    FROM parts
+                    WHERE article LIKE :s OR name LIKE :s OR raw_data LIKE :s
+                    LIMIT 5000
+                """).bindparams(bindparam('s', value=f"%{search}%"))
                 with engine.connect() as conn:
-                    df = pd.read_sql("""
-                        SELECT supplier, uploaded_at, filename, raw_data
-                        FROM parts
-                        WHERE article LIKE :s OR name LIKE :s OR raw_data LIKE :s
-                        LIMIT 5000
-                    """, conn, params={"s": f"%{search}%"})
+                    df = pd.read_sql(query, conn)
                 if df.empty:
                     st.warning("Ничего не найдено")
                 else:
