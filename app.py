@@ -6,6 +6,7 @@ import json
 import io
 import requests
 import os
+import re  # <-- для очистки цены
 from urllib.parse import quote
 
 # ============================================================
@@ -111,7 +112,26 @@ def upload_to_yandex_disk(file_bytes, filename, token):
     return f"https://disk.yandex.ru/d/???"
 
 # ============================================================
-# 4. ИНТЕРФЕЙС ПОЛЬЗОВАТЕЛЯ
+# 4. ФУНКЦИЯ ОЧИСТКИ ЦЕНЫ (удаляет запятые, пробелы, валюту)
+# ============================================================
+def clean_price(value):
+    """Преобразует цену из строки с запятыми и символами в число float"""
+    if pd.isna(value):
+        return None
+    # Преобразуем в строку (на случай, если пришло число)
+    s = str(value)
+    # Удаляем всё, кроме цифр, точки и минуса
+    cleaned = re.sub(r'[^\d\.\-]', '', s)
+    # Если после очистки пусто – вернём None
+    if not cleaned:
+        return None
+    try:
+        return float(cleaned)
+    except ValueError:
+        return None
+
+# ============================================================
+# 5. ИНТЕРФЕЙС ПОЛЬЗОВАТЕЛЯ
 # ============================================================
 st.set_page_config(page_title="AviaPazlAP", page_icon="logoSitr.jpg", layout="wide")
 
@@ -131,6 +151,19 @@ with tab1:
     if uploaded_file and supplier_name and st.button("Сохранить в базу", type="primary"):
         try:
             df = pd.read_excel(uploaded_file)
+
+            # --- ОЧИСТКА СТОЛБЦА С ЦЕНОЙ ПЕРЕД ПЕРЕИМЕНОВАНИЕМ ---
+            # Находим, какой столбец содержит цену (возможные имена)
+            price_col = None
+            for candidate in ['price', 'UNIT/USD', 'TOTAL/USD', 'Price']:
+                if candidate in df.columns:
+                    price_col = candidate
+                    break
+            if price_col:
+                df[price_col] = df[price_col].apply(clean_price)
+            # -------------------------------------------------
+
+            # Нормализация колонок (переименование)
             rename_map = {
                 'PN': 'article', 'P/N': 'article', 'TERM': 'article',
                 'DES': 'name', 'UNIT/USD': 'price', 'QTY': 'stock'
@@ -138,14 +171,18 @@ with tab1:
             for old, new in rename_map.items():
                 if old in df.columns and new not in df.columns:
                     df = df.rename(columns={old: new})
+
+            # Добавляем служебные колонки
             df['supplier'] = supplier_name
             df['uploaded_at'] = datetime.now().strftime("%Y-%m-%d %H:%M")
             df['filename'] = uploaded_file.name
             df['raw_data'] = df.apply(lambda x: json.dumps(x.to_dict(), ensure_ascii=False, default=str), axis=1)
+
             save_columns = ['supplier', 'article', 'name', 'price', 'stock', 'uploaded_at', 'filename', 'raw_data']
             for col in save_columns:
                 if col not in df.columns:
                     df[col] = None
+
             df[save_columns].to_sql('parts', engine, if_exists='append', index=False)
             st.success(f"✅ Сохранено строк: {len(df)}")
         except Exception as e:
