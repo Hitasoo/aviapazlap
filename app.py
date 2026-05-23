@@ -282,7 +282,7 @@ with tab3:
             exports_df['Скачать'] = exports_df['download_url'].apply(lambda url: f'<a href="{url}" target="_blank">📥 Скачать</a>')
             st.markdown(exports_df[['filename', 'created_at', 'Скачать']].to_html(escape=False, index=False), unsafe_allow_html=True)
         else:
-            st.info("Нет сохранённых экспортов.")
+            st.info("Нет сохранённых .")
     except Exception as e:
         st.error(f"Ошибка загрузки истории: {e}")
 
