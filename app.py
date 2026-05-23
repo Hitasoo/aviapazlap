@@ -9,20 +9,20 @@ import os
 from urllib.parse import quote
 
 # ============================================================
-# 1. ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ
+# 1. ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ (Render: DATABASE_URL, YANDEX_TOKEN)
 # ============================================================
 YANDEX_TOKEN = os.environ.get("YANDEX_TOKEN", "")
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 if DATABASE_URL:
     engine = create_engine(DATABASE_URL)
-    st.info("✅ Подключено к PostgreSQL (данные сохраняются)")
+    st.success("✅ Подключено к PostgreSQL (данные сохраняются)")
 else:
     engine = create_engine('sqlite:///suppliers.db', echo=False)
-    st.info("💻 Локальный режим: SQLite")
+    st.warning("💻 Локальный режим: SQLite (на Render добавьте DATABASE_URL)")
 
 # ============================================================
-# 2. БАЗА ДАННЫХ
+# 2. ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ
 # ============================================================
 def init_db():
     with engine.connect() as conn:
@@ -55,34 +55,7 @@ def init_db():
 init_db()
 
 # ============================================================
-# 3. ДИАГНОСТИКА ТОКЕНА (с кодированием пути)
-# ============================================================
-st.write("### 🧪 Проверка токена Яндекс.Диска")
-if not YANDEX_TOKEN:
-    st.error("❌ Токен не задан. Добавьте переменную окружения YANDEX_TOKEN.")
-else:
-    headers = {"Authorization": f"OAuth {YANDEX_TOKEN}"}
-    test_folder = "/AviaPazlAP_test"
-    encoded_path = quote(test_folder, safe='/')
-    try:
-        resp = requests.put("https://cloud-api.yandex.net/v1/disk/resources",
-                            headers=headers, params={"path": encoded_path})
-        if resp.status_code in (200, 201):
-            st.success("✅ Токен имеет право на запись (создание папок).")
-            # Удаляем тестовую папку
-            requests.delete("https://cloud-api.yandex.net/v1/disk/resources",
-                            headers=headers, params={"path": encoded_path, "permanently": "true"})
-        elif resp.status_code in (403, 401):
-            st.error("❌ Токен НЕ имеет права на запись (Forbidden/Unauthorized).")
-            st.info("Получите новый токен с правами disk.info, disk.read, disk.write.")
-        else:
-            st.warning(f"⚠️ Неизвестный ответ API: {resp.status_code}")
-    except Exception as e:
-        st.error(f"Ошибка соединения: {e}")
-st.divider()
-
-# ============================================================
-# 4. ФУНКЦИЯ ЗАГРУЗКИ НА ЯНДЕКС.ДИСК (с кодированием пути)
+# 3. ФУНКЦИЯ ЗАГРУЗКИ НА ЯНДЕКС.ДИСК (с кодированием пути)
 # ============================================================
 def upload_to_yandex_disk(file_bytes, filename, token):
     if not token:
@@ -93,7 +66,7 @@ def upload_to_yandex_disk(file_bytes, filename, token):
     folder_path = "/AviaPazlAP_exports"
     encoded_folder = quote(folder_path, safe='/')
 
-    # 1. Проверка/создание папки
+    # Проверка/создание папки
     check_url = "https://cloud-api.yandex.net/v1/disk/resources"
     resp = requests.get(check_url, headers=headers, params={"path": encoded_folder})
     if resp.status_code == 404:
@@ -106,7 +79,7 @@ def upload_to_yandex_disk(file_bytes, filename, token):
         st.error(f"Ошибка проверки папки: {resp.text}")
         return None
 
-    # 2. Получаем URL для загрузки
+    # Получаем URL для загрузки файла
     upload_url = "https://cloud-api.yandex.net/v1/disk/resources/upload"
     full_path = f"{folder_path}/{filename}"
     encoded_full = quote(full_path, safe='/')
@@ -116,20 +89,20 @@ def upload_to_yandex_disk(file_bytes, filename, token):
         return None
     upload_href = resp.json()["href"]
 
-    # 3. Загружаем файл
+    # Загружаем файл
     with io.BytesIO(file_bytes) as f:
         upload_resp = requests.put(upload_href, data=f.read())
     if upload_resp.status_code not in (200, 201):
         st.error(f"Ошибка загрузки файла: {upload_resp.text}")
         return None
 
-    # 4. Делаем файл публичным
+    # Делаем файл публичным
     publish_url = "https://cloud-api.yandex.net/v1/disk/resources/publish"
     pub_resp = requests.put(publish_url, headers=headers, params={"path": encoded_full})
     if pub_resp.status_code != 200:
         return f"https://disk.yandex.ru/client/disk/AviaPazlAP_exports/{filename}"
 
-    # 5. Получаем публичную ссылку
+    # Получаем публичную ссылку
     info_resp = requests.get(check_url, headers=headers, params={"path": encoded_full})
     if info_resp.status_code == 200:
         public_url = info_resp.json().get("public_url")
@@ -138,7 +111,7 @@ def upload_to_yandex_disk(file_bytes, filename, token):
     return f"https://disk.yandex.ru/d/???"
 
 # ============================================================
-# 5. ИНТЕРФЕЙС ПОЛЬЗОВАТЕЛЯ
+# 4. ИНТЕРФЕЙС ПОЛЬЗОВАТЕЛЯ
 # ============================================================
 st.set_page_config(page_title="AviaPazlAP", page_icon="logoSitr.jpg", layout="wide")
 
@@ -214,7 +187,7 @@ with tab2:
             except Exception as e:
                 st.error(f"Ошибка поиска: {e}")
 
-# --- Экспорт ---
+# --- Экспорт и статистика ---
 with tab3:
     st.subheader("Экспорт всей базы")
     if st.button("📥 Экспортировать ВСЮ базу в Excel", type="primary"):
@@ -232,7 +205,6 @@ with tab3:
                         full_df.to_excel(writer, index=False, sheet_name='All_Data')
                     output.seek(0)
                     file_bytes = output.getvalue()
-                    # Имя файла только латиница
                     filename = f"Full_Export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
 
                     if YANDEX_TOKEN:
@@ -246,9 +218,9 @@ with tab3:
                                 conn.commit()
                             st.success(f"✅ Файл загружен на Яндекс.Диск! [Скачать]({public_link})")
                         else:
-                            st.warning("Не удалось загрузить файл на Яндекс.Диск.")
+                            st.warning("Не удалось загрузить файл на Яндекс.Диск. Убедитесь, что токен имеет права disk.write.")
                     else:
-                        st.info("Токен не задан – загрузка в облако пропущена.")
+                        st.info("Токен Яндекс.Диска не задан. Экспорт только локальный.")
 
                     st.download_button(
                         label="⬇ Скачать полный Excel файл (локально)",
@@ -282,7 +254,7 @@ with tab3:
             exports_df['Скачать'] = exports_df['download_url'].apply(lambda url: f'<a href="{url}" target="_blank">📥 Скачать</a>')
             st.markdown(exports_df[['filename', 'created_at', 'Скачать']].to_html(escape=False, index=False), unsafe_allow_html=True)
         else:
-            st.info("Нет сохранённых .")
+            st.info("Нет сохранённых экспортов.")
     except Exception as e:
         st.error(f"Ошибка загрузки истории: {e}")
 
