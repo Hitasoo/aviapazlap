@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 from sqlalchemy import create_engine, text
-from sqlalchemy.pool import NullPool
 from datetime import datetime
 import json
 import io
@@ -25,23 +24,28 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 @st.cache_resource
 def get_db_engine(url):
     if url:
-        # Основные параметры подключения – все через connect_args
-        connect_args = {
-            "sslmode": "require",           # Явно требуем SSL
-            "keepalives": 1,                # Включаем TCP keepalive
-            "keepalives_idle": 30,          # Проверка через 30 сек бездействия
-            "keepalives_interval": 10,      # Интервал между проверками
-            "keepalives_count": 5,          # Количество неудачных попыток
-            "connect_timeout": 10,          # Таймаут на подключение
-        }
-        # Если в URL нет sslmode, добавляем его на всякий случай (но основной задан выше)
+        # Добавляем sslmode=require, если его нет
         if "sslmode" not in url:
             url += "&sslmode=require" if "?" in url else "?sslmode=require"
 
-        # Отключаем пул соединений – каждое подключение создаётся заново
+        # Критически важные настройки для стабильного соединения с Render
+        connect_args = {
+            "keepalives": 1,
+            "keepalives_idle": 30,
+            "keepalives_interval": 10,
+            "keepalives_count": 5,
+            "connect_timeout": 10,
+        }
+
+        # Используем небольшой пул с очень агрессивной политикой обновления
+        # Это решает проблему "SSL connection has been closed unexpectedly"
         return create_engine(
             url,
-            poolclass=NullPool,
+            pool_pre_ping=True,      # Проверяем соединение перед каждым использованием
+            pool_recycle=60,          # Принудительно пересоздаём соединение каждые 60 секунд
+            pool_size=5,              # Небольшой размер пула
+            max_overflow=2,           # Разрешаем немного дополнительных соединений
+            pool_use_lifo=True,       # Используем последнее созданное соединение
             connect_args=connect_args
         )
     # Локальный SQLite для разработки
@@ -121,8 +125,8 @@ def init_db():
 
 
 # Пытаемся инициализировать базу с повторными попытками
-max_retries = 3
-retry_delay = 2
+max_retries = 5  # увеличил до 5, чтобы дать больше шансов
+retry_delay = 3
 init_success = False
 for attempt in range(max_retries):
     try:
@@ -136,12 +140,13 @@ for attempt in range(max_retries):
             time.sleep(retry_delay)
         else:
             st.error(
-                f"❌ Ошибка инициализации базы данных после {max_retries} попыток.\n"
-                "Пожалуйста, проверьте:\n"
-                "1. Переменная DATABASE_URL задана корректно.\n"
-                "2. В настройках PostgreSQL (ACL) разрешены подключения с IP-адреса приложения.\n"
-                "3. Попробуйте временно установить ACL = 0.0.0.0/0.\n\n"
-                f"Техническая ошибка: {e}"
+                f"❌ Ошибка инициализации базы данных после {max_retries} попыток.\n\n"
+                "**Пожалуйста, проверьте:**\n"
+                "1. Переменная DATABASE_URL задана корректно (используйте **External Database URL** из настроек Render).\n"
+                "2. В настройках PostgreSQL (Access Control) добавлено правило **0.0.0.0/0** (временно для проверки).\n"
+                "3. Попробуйте перезапустить базу данных в панели Render.\n"
+                "4. Убедитесь, что ваше приложение и база данных находятся в одном регионе (например, Oregon).\n\n"
+                f"**Техническая ошибка:** {e}"
             )
             st.stop()
 
