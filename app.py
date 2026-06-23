@@ -8,6 +8,7 @@ import io
 import requests
 import os
 import re
+import time
 
 # ============================================================
 # Настройка страницы (ОБЯЗАТЕЛЬНО должна быть самой первой командой)
@@ -24,24 +25,20 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 @st.cache_resource
 def get_db_engine(url):
     if url:
-        # Добавляем sslmode=require, если его нет
-        if "sslmode" not in url:
-            if "?" in url:
-                url += "&sslmode=require"
-            else:
-                url += "?sslmode=require"
-
-        # Критически важные настройки для стабильного соединения с Render PostgreSQL
+        # Основные параметры подключения – все через connect_args
         connect_args = {
+            "sslmode": "require",           # Явно требуем SSL
             "keepalives": 1,                # Включаем TCP keepalive
-            "keepalives_idle": 30,          # Ждём 30 секунд бездействия перед проверкой
+            "keepalives_idle": 30,          # Проверка через 30 сек бездействия
             "keepalives_interval": 10,      # Интервал между проверками
-            "keepalives_count": 5,          # Количество неудачных проверок
-            "connect_timeout": 10,          # Таймаут на установку соединения
+            "keepalives_count": 5,          # Количество неудачных попыток
+            "connect_timeout": 10,          # Таймаут на подключение
         }
+        # Если в URL нет sslmode, добавляем его на всякий случай (но основной задан выше)
+        if "sslmode" not in url:
+            url += "&sslmode=require" if "?" in url else "?sslmode=require"
 
-        # Используем NullPool – каждое соединение создаётся заново и закрывается,
-        # что полностью устраняет проблемы с "висячими" соединениями на Render
+        # Отключаем пул соединений – каждое подключение создаётся заново
         return create_engine(
             url,
             poolclass=NullPool,
@@ -60,7 +57,7 @@ else:
 
 
 # ============================================================
-# 2. ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ (ВСЕ ТАБЛИЦЫ)
+# 2. ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ (ВСЕ ТАБЛИЦЫ) С ПОВТОРНЫМИ ПОПЫТКАМИ
 # ============================================================
 def init_db():
     is_sqlite = engine.url.drivername == 'sqlite'
@@ -123,17 +120,32 @@ def init_db():
         """))
 
 
-# Инициализируем базу, если произойдёт ошибка – покажем её в интерфейсе
-try:
-    init_db()
-except Exception as e:
-    st.error(f"❌ Ошибка инициализации базы данных: {e}")
-    st.error(
-        "Пожалуйста, проверьте настройки подключения к базе данных.\n"
-        "Убедитесь, что переменная DATABASE_URL задана корректно и "
-        "IP-адрес вашего приложения разрешён в настройках PostgreSQL (ACL)."
-    )
-    st.stop()
+# Пытаемся инициализировать базу с повторными попытками
+max_retries = 3
+retry_delay = 2
+init_success = False
+for attempt in range(max_retries):
+    try:
+        init_db()
+        st.sidebar.success("✅ База данных инициализирована успешно")
+        init_success = True
+        break
+    except Exception as e:
+        st.sidebar.warning(f"Попытка {attempt+1}/{max_retries} инициализации БД не удалась: {e}")
+        if attempt < max_retries - 1:
+            time.sleep(retry_delay)
+        else:
+            st.error(
+                f"❌ Ошибка инициализации базы данных после {max_retries} попыток.\n"
+                "Пожалуйста, проверьте:\n"
+                "1. Переменная DATABASE_URL задана корректно.\n"
+                "2. В настройках PostgreSQL (ACL) разрешены подключения с IP-адреса приложения.\n"
+                "3. Попробуйте временно установить ACL = 0.0.0.0/0.\n\n"
+                f"Техническая ошибка: {e}"
+            )
+            st.stop()
+
+# Если инициализация не удалась, st.stop() уже вызван, поэтому код дальше не выполнится.
 
 
 # ============================================================
