@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from sqlalchemy import create_engine, text
+from sqlalchemy.pool import NullPool  # <-- Добавлен импорт
 from datetime import datetime
 import json
 import io
@@ -15,7 +16,7 @@ import time
 st.set_page_config(page_title="AviaPazlAP", page_icon="logoSitr.jpg", layout="wide")
 
 # ============================================================
-# 1. ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ И ПОДКЛЮЧЕНИЕ К БАЗЕ (исправленное)
+# 1. ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ И ПОДКЛЮЧЕНИЕ К БАЗЕ
 # ============================================================
 YANDEX_TOKEN = os.environ.get("YANDEX_TOKEN", "")
 DATABASE_URL = os.environ.get("DATABASE_URL")
@@ -28,7 +29,7 @@ def get_db_engine(url):
         if "sslmode" not in url:
             url += "&sslmode=require" if "?" in url else "?sslmode=require"
 
-        # Критически важные настройки для стабильного соединения с Render
+        # Настройки TCP Keepalive для предотвращения обрыва соединения
         connect_args = {
             "keepalives": 1,
             "keepalives_idle": 30,
@@ -37,15 +38,11 @@ def get_db_engine(url):
             "connect_timeout": 10,
         }
 
-        # Используем небольшой пул с очень агрессивной политикой обновления
-        # Это решает проблему "SSL connection has been closed unexpectedly"
+        # Используем NullPool — каждое соединение создаётся заново и сразу закрывается
+        # Это единственный надёжный способ избежать ошибок с "мёртвыми" соединениями на Render
         return create_engine(
             url,
-            pool_pre_ping=True,      # Проверяем соединение перед каждым использованием
-            pool_recycle=60,          # Принудительно пересоздаём соединение каждые 60 секунд
-            pool_size=5,              # Небольшой размер пула
-            max_overflow=2,           # Разрешаем немного дополнительных соединений
-            pool_use_lifo=True,       # Используем последнее созданное соединение
+            poolclass=NullPool,
             connect_args=connect_args
         )
     # Локальный SQLite для разработки
@@ -125,7 +122,7 @@ def init_db():
 
 
 # Пытаемся инициализировать базу с повторными попытками
-max_retries = 5  # увеличил до 5, чтобы дать больше шансов
+max_retries = 5
 retry_delay = 3
 init_success = False
 for attempt in range(max_retries):
@@ -146,11 +143,9 @@ for attempt in range(max_retries):
                 "2. В настройках PostgreSQL (Access Control) добавлено правило **0.0.0.0/0** (временно для проверки).\n"
                 "3. Попробуйте перезапустить базу данных в панели Render.\n"
                 "4. Убедитесь, что ваше приложение и база данных находятся в одном регионе (например, Oregon).\n\n"
-                f"**Техническая ошибка:** {e}"
+                "**Техническая ошибка:** {e}"
             )
             st.stop()
-
-# Если инициализация не удалась, st.stop() уже вызван, поэтому код дальше не выполнится.
 
 
 # ============================================================
