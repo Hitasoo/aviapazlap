@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from sqlalchemy import create_engine, text
+from sqlalchemy.pool import NullPool  # <-- Импорт для отключения пула
 from datetime import datetime
 import json
 import io
@@ -14,7 +15,7 @@ import re
 st.set_page_config(page_title="AviaPazlAP", page_icon="logoSitr.jpg", layout="wide")
 
 # ============================================================
-# 1. ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ И ПОДКЛЮЧЕНИЕ К БАЗЕ С ЗАЩИТОЙ SSL
+# 1. ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ И ПОДКЛЮЧЕНИЕ К БАЗЕ (исправленное)
 # ============================================================
 YANDEX_TOKEN = os.environ.get("YANDEX_TOKEN", "")
 DATABASE_URL = os.environ.get("DATABASE_URL")
@@ -23,22 +24,18 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 @st.cache_resource
 def get_db_engine(url):
     if url:
-        # Автоматически добавляем требование SSL для стабильного подключения на Render
+        # Добавляем sslmode=require, если его нет
         if "sslmode" not in url:
             url += "&sslmode=require" if "?" in url else "?sslmode=require"
-
-        # Настраиваем пул соединений с защитой от внезапных обрывов сессии
-        return create_engine(
-            url,
-            pool_pre_ping=True,
-            pool_recycle=300
-        )
+        # Используем NullPool – каждое соединение создаётся заново и закрывается
+        # Это решает проблему "SSL connection has been closed unexpectedly"
+        return create_engine(url, poolclass=NullPool)
+    # Локальный SQLite для разработки
     return create_engine('sqlite:///suppliers.db', echo=False)
 
 
 engine = get_db_engine(DATABASE_URL)
 
-# Выводим статус подключения в боковое меню (sidebar)
 if DATABASE_URL:
     st.sidebar.success("✅ Подключено к PostgreSQL")
 else:
@@ -109,7 +106,12 @@ def init_db():
         """))
 
 
-init_db()
+# Инициализируем базу, если произойдёт ошибка – покажем её в интерфейсе
+try:
+    init_db()
+except Exception as e:
+    st.error(f"❌ Ошибка инициализации базы данных: {e}")
+    st.stop()
 
 
 # ============================================================
@@ -274,7 +276,6 @@ with tab2:
             st.warning("Введите минимум 2 символа")
         else:
             try:
-                # На SQLite сработает как LIKE, на Postgres автоматически применится регистронезависимый ILIKE
                 is_postgres = "postgres" in engine.url.drivername
                 like_op = "ILIKE" if is_postgres else "LIKE"
                 query = text(
