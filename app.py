@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from sqlalchemy import create_engine, text
-from sqlalchemy.pool import NullPool  # <-- Импорт для отключения пула
+from sqlalchemy.pool import NullPool
 from datetime import datetime
 import json
 import io
@@ -26,10 +26,27 @@ def get_db_engine(url):
     if url:
         # Добавляем sslmode=require, если его нет
         if "sslmode" not in url:
-            url += "&sslmode=require" if "?" in url else "?sslmode=require"
-        # Используем NullPool – каждое соединение создаётся заново и закрывается
-        # Это решает проблему "SSL connection has been closed unexpectedly"
-        return create_engine(url, poolclass=NullPool)
+            if "?" in url:
+                url += "&sslmode=require"
+            else:
+                url += "?sslmode=require"
+
+        # Критически важные настройки для стабильного соединения с Render PostgreSQL
+        connect_args = {
+            "keepalives": 1,                # Включаем TCP keepalive
+            "keepalives_idle": 30,          # Ждём 30 секунд бездействия перед проверкой
+            "keepalives_interval": 10,      # Интервал между проверками
+            "keepalives_count": 5,          # Количество неудачных проверок
+            "connect_timeout": 10,          # Таймаут на установку соединения
+        }
+
+        # Используем NullPool – каждое соединение создаётся заново и закрывается,
+        # что полностью устраняет проблемы с "висячими" соединениями на Render
+        return create_engine(
+            url,
+            poolclass=NullPool,
+            connect_args=connect_args
+        )
     # Локальный SQLite для разработки
     return create_engine('sqlite:///suppliers.db', echo=False)
 
@@ -111,6 +128,11 @@ try:
     init_db()
 except Exception as e:
     st.error(f"❌ Ошибка инициализации базы данных: {e}")
+    st.error(
+        "Пожалуйста, проверьте настройки подключения к базе данных.\n"
+        "Убедитесь, что переменная DATABASE_URL задана корректно и "
+        "IP-адрес вашего приложения разрешён в настройках PostgreSQL (ACL)."
+    )
     st.stop()
 
 
